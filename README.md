@@ -31,8 +31,13 @@ O fluxo de interação do agente pode ser resumido da seguinte forma:
 ```mermaid
 graph TD
     A[Usuário: Pergunta em Linguagem Natural] --> B{Root Agent};
+    
+    %% Documentação do Dataset alimenta o contexto
+    I[Documentação do Dataset<br/>documentation/] --> B;
+    I --> D;
+    
     B -- Pergunta --> C(call_db_agent);
-    C -- NL2SQL --> D[Sub-Agente de BD (db_agent)];
+    C -- NL2SQL + Contexto --> D[Sub-Agente de BD (db_agent)];
     D -- Consulta SQL --> E[Banco de Dados (e.g., BigQuery)];
     E -- Dados Brutos --> D;
     D -- Dados Brutos (query_result) --> B;
@@ -42,6 +47,111 @@ graph TD
     H -- Resultado da Análise --> G;
     G -- Resultado da Análise --> B;
     B -- Resposta Final --> A;
+    
+    %% Styling para destacar a documentação
+    classDef docStyle fill:#e1f5fe,stroke:#01579b,stroke-width:2px,color:#000
+    class I docStyle
+```
+
+## Configuração da Documentação do Dataset
+
+Antes de realizar o deployment, é essencial configurar a documentação do seu dataset na pasta `documentation/`. Esta documentação é automaticamente carregada pelo agente e injetada nos prompts para melhorar significativamente a interpretação dos dados e a geração de consultas SQL precisas.
+
+### Como Funciona
+
+O sistema utiliza a função `load_documentation_files()` (localizada em `sql_agent/utils/utils.py`) para ler automaticamente todos os arquivos `.md` e `.sql` da pasta `documentation/` e incluir seu conteúdo no contexto do agente principal. Esta documentação é carregada durante a inicialização do agente e fica disponível em todos os prompts.
+
+### Conteúdo Recomendado
+
+Adicione arquivos na pasta `documentation/` com informações detalhadas sobre seu dataset. Quanto mais contexto você fornecer, melhor será a performance do agente. Inclua:
+
+#### **Metadados das Tabelas**
+- Descrição do propósito de cada tabela
+- Relacionamentos entre tabelas (chaves primárias e estrangeiras)
+- Cardinalidade dos relacionamentos
+- Regras de integridade dos dados
+
+#### **Star Schema e Modelagem Dimensional**
+- Identificação de tabelas fato e dimensão
+- Hierarquias dimensionais
+- Medidas e métricas calculadas
+- Agregações pré-computadas
+
+#### **Métricas de Negócio e KPIs**
+- Definições precisas de indicadores de performance
+- Fórmulas de cálculo para métricas complexas
+- Regras de negócio específicas
+- Filtros e segmentações importantes
+
+#### **Exemplos de Queries**
+- Consultas SQL comuns para casos de uso frequentes
+- Queries complexas com joins e agregações
+- Exemplos de análises típicas do domínio
+- Padrões de consulta recomendados
+
+#### **Dicionário de Dados**
+- Significado detalhado de cada coluna
+- Valores possíveis para campos categóricos
+- Unidades de medida e formatos
+- Regras de validação de dados
+
+#### **Contexto de Domínio**
+- Informações sobre o negócio ou área de aplicação
+- Terminologia específica do domínio
+- Sazonalidades e padrões temporais
+- Limitações e particularidades dos dados
+
+### Estrutura Sugerida
+
+Organize a documentação em arquivos temáticos para facilitar a manutenção:
+
+```
+documentation/
+├── dataset-overview.md          # Visão geral do dataset e contexto de negócio
+├── tables-schema.md             # Estrutura detalhada das tabelas e relacionamentos
+├── star-schema.md               # Modelagem dimensional (fatos e dimensões)
+├── business-metrics.md          # KPIs e métricas de negócio importantes
+├── data-dictionary.md           # Dicionário de dados com significado das colunas
+└── example-queries.sql          # Queries de exemplo para casos de uso comuns
+```
+
+### Impacto na Performance
+
+Uma documentação bem estruturada resulta em:
+- **Maior precisão** na geração de consultas SQL
+- **Melhor interpretação** de perguntas ambíguas
+- **Respostas mais contextualizadas** para o domínio específico
+- **Redução de erros** em consultas complexas
+- **Melhor experiência do usuário** com respostas mais relevantes
+
+### Exemplo de Conteúdo
+
+**Arquivo: `documentation/business-metrics.md`**
+```markdown
+# Métricas de Negócio
+
+## Revenue (Receita)
+- **Definição**: Soma total de vendas em um período
+- **Fórmula**: SUM(orders.total_amount)
+- **Filtros**: Apenas pedidos com status 'completed'
+
+## Customer Lifetime Value (CLV)
+- **Definição**: Valor total gasto por um cliente durante seu relacionamento
+- **Fórmula**: SUM(orders.total_amount) WHERE customer_id = X
+- **Observações**: Considerar apenas pedidos dos últimos 24 meses
+```
+
+**Arquivo: `documentation/example-queries.sql`**
+```sql
+-- Vendas mensais por categoria
+SELECT 
+    DATE_TRUNC(DATE(order_date), MONTH) as month,
+    product_category,
+    SUM(total_amount) as monthly_revenue
+FROM `project.dataset.orders` o
+JOIN `project.dataset.products` p ON o.product_id = p.id
+GROUP BY month, product_category
+ORDER BY month DESC, monthly_revenue DESC;
 ```
 
 ## Requisitos para Deployment
