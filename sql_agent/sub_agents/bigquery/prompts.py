@@ -19,6 +19,9 @@ Essas instruções guiam o comportamento, o fluxo de trabalho e o uso de ferrame
 """
 
 import os
+from ...utils.utils import load_documentation_files
+
+documentation_content = load_documentation_files()
 
 
 def return_instructions_bigquery() -> str:
@@ -50,5 +53,7 @@ def return_instructions_bigquery() -> str:
       Lembre-se de que você é um agente de orquestração, não um especialista em SQL, portanto, use as ferramentas para ajudá-lo a gerar SQL, mas não invente SQL.
 
     """
+
+    instruction_prompt_bqml_v1 += documentation_content
 
     return instruction_prompt_bqml_v1

@@ -23,6 +23,9 @@ from datetime import date
 from google.genai import types
 
 from google.adk.agents import Agent
+from google.adk.runners import Runner
+from google.adk.artifacts import InMemoryArtifactService
+from google.adk.sessions import InMemorySessionService
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.tools import load_artifacts
 
@@ -30,9 +33,12 @@ from .sub_agents.bigquery.tools import (
     get_database_settings as get_bq_database_settings,
 )
 from .prompt import return_instructions_root
-from .tools import call_db_agent, call_ds_agent
+from .tools import call_db_agent, call_ds_agent, download_image_and_save_to_artifacts
 
 date_today = date.today()
+
+artifact_service = InMemoryArtifactService()
+session_service = InMemorySessionService()
 
 
 def setup_before_agent_call(callback_context: CallbackContext):
@@ -68,14 +74,23 @@ root_agent = Agent(
         f"""
         Você é um Sistema Multiagente de Ciência de Dados e Análise de Dados.
         Data de hoje: {date_today}
+        Sua respostas devem ser APENAS em Português Brasileiro(pt-br)
         """
     ),
-    sub_agents=[],
     tools=[
         call_db_agent,
         call_ds_agent,
         load_artifacts,
+        download_image_and_save_to_artifacts,
     ],
     before_agent_callback=setup_before_agent_call,
     generate_content_config=types.GenerateContentConfig(temperature=0.01),
+)
+
+
+runner = Runner(
+    agent=root_agent,
+    app_name="ds-app",
+    session_service=session_service,
+    artifact_service=artifact_service,
 )

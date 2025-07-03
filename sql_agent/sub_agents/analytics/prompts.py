@@ -98,7 +98,6 @@ def return_instructions_ds() -> str:
     errado: predicted_value = prediction.predicted_mean[0]
     correto: confidence_interval_lower = confidence_intervals.iloc[0, 0]
     errado: confidence_interval_lower = confidence_intervals[0][0]
-
   """
 
     return instruction_prompt_analytics

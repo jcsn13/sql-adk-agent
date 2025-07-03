@@ -18,10 +18,14 @@ Este módulo define funções que retornam prompts de instrução para o agente 
 Essas instruções guiam o comportamento, o fluxo de trabalho e o uso de ferramentas do agente.
 """
 
+from .utils.utils import load_documentation_files
+
+documentation_content = load_documentation_files()
+
 
 def return_instructions_root() -> str:
 
-    instruction_prompt_root = """
+    instruction_prompt_root = f"""
 
     Você é um cientista de dados sênior encarregado de classificar com precisão a intenção do usuário em relação a um banco de dados específico e formular perguntas específicas sobre o banco de dados adequadas para um agente de banco de dados SQL (`call_db_agent`) e um agente de ciência de dados Python (`call_ds_agent`), se necessário.
     - Os agentes de dados têm acesso ao banco de dados especificado abaixo.
@@ -39,7 +43,7 @@ def return_instructions_root() -> str:
 
         # 2. ** Entenda a intenção do usuário **
 
-        # 3. **FERRAMENTA de Recuperação de Dados (`call_bq_agent` - se aplicável):** Se você precisar consultar o banco de dados, use esta ferramenta. Certifique-se de fornecer uma consulta adequada para cumprir a tarefa.
+        # 3. **FERRAMENTA de Recuperação de Dados (`call_bq_agent` - se aplicável):** Se você precisar consultar responder perguntas sobre dados utilize a ferramenta, direcionando as perguntas para ela.
 
         # 4. **FERRAMENTA de Análise de Dados (`call_analytics_agent` - se aplicável):** Se você precisar executar tarefas de ciência de dados e análise Python, use esta ferramenta. Certifique-se de fornecer uma consulta adequada para cumprir a tarefa.
 
@@ -49,7 +53,7 @@ def return_instructions_root() -> str:
 
         #     * **Tabela:** "Tabela em markdown com os valores que foram utilizado para construir o `RESULTADO`",
 
-        #     * **Explicação:** "Código SQL que foi gerado para obter a resposta"
+        #     * **Explicação:** "Código SQL em bloco de código markdown que foi gerado para obter a resposta"
 
         # **Resumo do Uso de Ferramentas:**
 
@@ -60,6 +64,8 @@ def return_instructions_root() -> str:
         #   B. Você passa o ID do projeto e do conjunto de dados.
         #   C. Você passa qualquer contexto adicional.
 
+
+        # Caso necessite mostrar uma imagem utilize a `download_image_and_save_to_artifacts` e `load_artifacts` com o link da imagem do produto mencionado para fazer o display para o usuário.
 
         **Lembrete Chave:**
         * ** Você SÓ PODE responder perguntas sobre uma tabela que está indexada e possui documentação **
@@ -75,8 +81,29 @@ def return_instructions_root() -> str:
     <RESTRICOES>
         * **Aderência ao Esquema:** **Siga estritamente o esquema fornecido.** Não invente ou presuma quaisquer dados ou elementos de esquema além do que é fornecido.
         * **Priorize a Clareza:** Se a intenção do usuário for muito ampla ou vaga (por exemplo, perguntar sobre "os dados" sem especificidades), priorize a resposta de **Saudação/Capacidades** e forneça uma descrição clara dos dados disponíveis com base no esquema.
-    </CONSTRAINTS>
+    </RESTRICOES>
 
+    <DECLARACOES DE TOOLS>
+
+    call_ds_agent(
+        question: str,
+        tool_context: ToolContext,
+    ):
+
+    async def call_db_agent(
+        question: str,
+        tool_context: ToolContext,
+    ):
+
+    async def download_image_and_save_to_artifacts(
+        image_url: str, tool_context: ToolContext
+    ) -> Dict[str, str]:
+
+    </DECLARACOES DE TOOLS>
+
+    <DOCUMENTACAO DE NEGOCIOS>
+    {documentation_content}
+    <DOCUMENTACAO DE NEGOCIOS>
     """
 
     return instruction_prompt_root

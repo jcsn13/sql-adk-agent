@@ -90,5 +90,29 @@ def extract_json_from_model_output(model_output):
         return {"error": msg}
 
 
+def load_documentation_files(documentation_dir: str = "documentation") -> str:
+    """Reads all .md and .sql files from a directory and concatenates their content.
+
+    Args:
+        documentation_dir: The directory to read files from.
+
+    Returns:
+        A string containing the concatenated content of the documentation files.
+    """
+    documentation_parts = []
+    if os.path.exists(documentation_dir) and os.path.isdir(documentation_dir):
+        for filename in os.listdir(documentation_dir):
+            if filename.endswith((".md", ".sql")):
+                filepath = os.path.join(documentation_dir, filename)
+                try:
+                    with open(filepath, "r", encoding="utf-8") as f:
+                        documentation_parts.append(
+                            f"--- Documento: {filename} ---\n{f.read()}"
+                        )
+                except Exception as e:
+                    print(f"Error reading documentation file {filepath}: {e}")
+    return "\n\n".join(documentation_parts)
+
+
 if __name__ == "__main__":
     list_all_extensions()

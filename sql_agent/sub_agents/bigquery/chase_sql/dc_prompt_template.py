@@ -683,6 +683,11 @@ Pergunta:
 {QUESTION}
 
 **************************
+【Documentação Auxiliar sobre o Dataset】
+Documentação:
+{DOCUMENTATION}
+
+**************************
 【Resposta】
 Repetindo a pergunta e gerando o SQL com Divisão e Conquista Recursiva.
 """

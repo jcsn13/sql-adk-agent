@@ -23,6 +23,7 @@ from google.adk.tools import ToolContext
 from .dc_prompt_template import DC_PROMPT_TEMPLATE
 from .llm_utils import GeminiModel
 from .qp_prompt_template import QP_PROMPT_TEMPLATE
+from ....utils.utils import load_documentation_files
 from .sql_postprocessor import sql_translator
 
 # pylint: enable=g-importing-member
@@ -112,13 +113,21 @@ def initial_bq_nl2sql(
     temperature = tool_context.state["database_settings"]["temperature"]
     generate_sql_type = tool_context.state["database_settings"]["generate_sql_type"]
 
+    # Read documentation files
+    documentation_content = load_documentation_files()
     if generate_sql_type == GenerateSQLType.DC.value:
         prompt = DC_PROMPT_TEMPLATE.format(
-            SCHEMA=ddl_schema, QUESTION=question, BQ_PROJECT_ID=BQ_PROJECT_ID
+            SCHEMA=ddl_schema,
+            QUESTION=question,
+            BQ_PROJECT_ID=BQ_PROJECT_ID,
+            DOCUMENTATION=documentation_content,
         )
     elif generate_sql_type == GenerateSQLType.QP.value:
         prompt = QP_PROMPT_TEMPLATE.format(
-            SCHEMA=ddl_schema, QUESTION=question, BQ_PROJECT_ID=BQ_PROJECT_ID
+            SCHEMA=ddl_schema,
+            QUESTION=question,
+            BQ_PROJECT_ID=BQ_PROJECT_ID,
+            DOCUMENTATION=documentation_content,
         )
     else:
         raise ValueError(f"Unsupported generate_sql_type: {generate_sql_type}")

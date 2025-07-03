@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Local files
+scripts
+
 # C extensions
 *.so
 
@@ -137,3 +140,6 @@ dmypy.json
 *.swo
 *~
 .DS_Store
+
+# Docs files
+documentation/

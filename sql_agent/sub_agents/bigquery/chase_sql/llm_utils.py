@@ -71,6 +71,7 @@ GEMINI_AVAILABLE_REGIONS = [
     "asia-south1",
     "asia-southeast1",
     "southamerica-east1",
+    "global",
 ]
 GEMINI_URL = (
     "projects/{GCP_PROJECT}/locations/{region}/publishers/google/models/{model_name}"
