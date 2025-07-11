@@ -5,11 +5,11 @@
 substitutions:
   _PROJECT_ID: "your-project-id"
   _LOCATION: "region"
-  _ROOT_AGENT_MODEL: "gemini-2.5-flash-preview-05-20"
-  _ANALYTICS_AGENT_MODEL: "gemini-2.0-flash-001"
-  _BASELINE_NL2SQL_MODEL: "gemini-2.5-flash-preview-05-20"
-  _BIGQUERY_AGENT_MODEL: "gemini-2.0-flash-001"
-  _CHASE_NL2SQL_MODEL: "gemini-2.5-flash-preview-05-20"
+  _ROOT_AGENT_MODEL: "gemini-2.5-flash"
+  _ANALYTICS_AGENT_MODEL: "gemini-2.5-flash"
+  _BASELINE_NL2SQL_MODEL: "gemini-2.5-flash"
+  _BIGQUERY_AGENT_MODEL: "gemini-2.5-flash"
+  _CHASE_NL2SQL_MODEL: "gemini-2.5-flash"
   _BQ_DATASET_ID: "your-dataset"
   _BQ_PROJECT_ID: "your-project-id"
   _CODE_INTERPRETER_EXTENSION_NAME: "" # Leave it blank for create a new extension
