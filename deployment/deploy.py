@@ -140,7 +140,9 @@ def create(env_vars: dict[str, str]) -> None:
     print(f"\nSuccessfully created agent: {remote_agent.resource_name}")
 
     # Write the agent resource name to a file for subsequent Cloud Build steps
-    agent_resource_name_file = "agent_resource_name.txt"
+    agent_resource_name_file = os.path.join(
+        os.path.dirname(__file__), "agent_resource_name.txt"
+    )
     try:
         with open(agent_resource_name_file, "w") as f:
             f.write(remote_agent.resource_name)
@@ -180,6 +182,9 @@ def main(argv: list[str]) -> None:  # pylint: disable=unused-argument
         FLAGS.project_id if FLAGS.project_id else os.getenv("GOOGLE_CLOUD_PROJECT")
     )
     location = FLAGS.location if FLAGS.location else os.getenv("GOOGLE_CLOUD_LOCATION")
+    # If location is 'global', hardcode to 'us-central1'
+    if location == "global":
+        location = "us-central1"
     # Default bucket name convention if not provided
     default_bucket_name = f"{project_id}-adk-staging" if project_id else None
     bucket_name = (

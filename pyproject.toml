@@ -21,7 +21,7 @@ google-cloud-aiplatform = { extras = [
     "adk",
     "agent-engines",
 ], version = "^1.102.0" }
-google-genai = "^0.1.0"
+google-genai = "^1.21.1"
 absl-py = "^2.2.2"
 pydantic = "^2.11.3"
 
