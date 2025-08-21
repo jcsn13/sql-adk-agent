@@ -42,6 +42,7 @@ read -r -d '' JSON_PAYLOAD <<EOF
       "reasoning_engine": "${ADK_REASONING_ENGINE_PATH}"
     },
     "authorizations": [
+      "${AUTH_PATH}"
     ]
   }
 }

@@ -23,6 +23,7 @@ from ...utils.utils import get_env_var
 from google.adk.tools import ToolContext
 from google.cloud import bigquery
 from google.genai import Client
+from google.oauth2 import credentials
 
 from .chase_sql import chase_constants
 
@@ -35,32 +36,65 @@ llm_client = Client(vertexai=True, project=project, location=location)
 MAX_NUM_ROWS = 80
 
 
-database_settings = None
-bq_client = None
+def get_bq_client(tool_context: ToolContext) -> bigquery.Client:
+    """Initializes and returns a BigQuery client.
+
+    This function creates a BigQuery client, using OAuth credentials if an access
+    token is available in the tool context's state. This allows the agent to
+    authenticate and interact with BigQuery on behalf of the user.
+
+    Args:
+        tool_context: The context object for the tool, which may contain OAuth
+          tokens.
+
+    Returns:
+        A `bigquery.Client` instance, configured with credentials if available.
+    """
+    auth_id = get_env_var("AUTH_ID")
+    token_key = f"temp:{auth_id}"
+
+    if token_key in tool_context.state:
+        access_token = tool_context.state[token_key]
+        creds = credentials.Credentials(token=access_token)
+        return bigquery.Client(project=get_env_var("BQ_PROJECT_ID"), credentials=creds)
 
 
-def get_bq_client():
-    """Get BigQuery client."""
-    global bq_client
-    if bq_client is None:
-        bq_client = bigquery.Client(project=get_env_var("BQ_PROJECT_ID"))
-    return bq_client
+def get_database_settings(tool_context: ToolContext) -> dict:
+    """Retrieves database settings, initializing them if not already present.
+
+    This function checks if the database settings are already loaded in the tool
+    context's state. If not, it calls `update_database_settings` to fetch them
+    and stores them in the state for subsequent use.
+
+    Args:
+        tool_context: The context object for the tool, used for state management.
+
+    Returns:
+        A dictionary containing the database settings.
+    """
+    if "database_settings" not in tool_context.state:
+        tool_context.state["database_settings"] = update_database_settings(tool_context)
+    return tool_context.state["database_settings"]
 
 
-def get_database_settings():
-    """Get database settings."""
-    global database_settings
-    if database_settings is None:
-        database_settings = update_database_settings()
-    return database_settings
+def update_database_settings(tool_context: ToolContext) -> dict:
+    """Fetches and updates the database settings.
 
+    This function retrieves the latest database schema (DDL) for the configured
+    BigQuery dataset and combines it with other settings, such as project and
+    dataset IDs, and constants required for ChaseSQL.
 
-def update_database_settings():
-    """Update database settings."""
-    global database_settings
+    Args:
+        tool_context: The context object for the tool, used to get the BigQuery
+          client.
+
+    Returns:
+        A dictionary containing the updated database settings.
+    """
+    bq_client = get_bq_client(tool_context)
     ddl_schema = get_bigquery_schema(
         get_env_var("BQ_DATASET_ID"),
-        client=get_bq_client(),
+        client=bq_client,
         project_id=get_env_var("BQ_PROJECT_ID"),
     )
     database_settings = {
@@ -76,13 +110,19 @@ def update_database_settings():
 def get_bigquery_schema(dataset_id, client=None, project_id=None):
     """Retrieves schema and generates DDL with example values for a BigQuery dataset.
 
+    This function inspects a BigQuery dataset, extracts the schema for each table,
+    and generates `CREATE TABLE` DDL statements. It also includes example rows
+    (up to 5) as `INSERT INTO` statements to provide context on the data.
+
     Args:
-        dataset_id (str): The ID of the BigQuery dataset (e.g., 'my_dataset').
-        client (bigquery.Client): A BigQuery client.
-        project_id (str): The ID of your Google Cloud Project.
+        dataset_id: The ID of the BigQuery dataset (e.g., 'my_dataset').
+        client: An optional `bigquery.Client` instance. If not provided, a new
+          one will be created.
+        project_id: The ID of the Google Cloud Project.
 
     Returns:
-        str: A string containing the generated DDL statements.
+        A string containing the generated DDL statements for all tables in the
+        dataset.
     """
 
     if client is None:
@@ -143,13 +183,18 @@ def initial_bq_nl2sql(
 ) -> str:
     """Generates an initial SQL query from a natural language question.
 
+    This function uses a large language model to convert a user's natural
+    language question into a BigQuery SQL query. It constructs a prompt that
+    includes the database schema and the user's question to guide the model in
+    generating a relevant and syntactically correct query.
+
     Args:
-        question (str): Natural language question.
-        tool_context (ToolContext): The tool context to use for generating the SQL
-          query.
+        question: The natural language question from the user.
+        tool_context: The tool context, used to access database settings and
+          store the generated SQL query.
 
     Returns:
-        str: An SQL statement to answer this question.
+        A string containing the generated SQL query.
     """
 
     prompt_template = """
@@ -183,7 +228,7 @@ A estrutura do banco de dados é definida pelos seguintes esquemas de tabela (po
 
    """
 
-    ddl_schema = tool_context.state["database_settings"]["bq_ddl_schema"]
+    ddl_schema = get_database_settings(tool_context)["bq_ddl_schema"]
 
     prompt = prompt_template.format(
         MAX_NUM_ROWS=MAX_NUM_ROWS, SCHEMA=ddl_schema, QUESTION=question
@@ -210,33 +255,21 @@ def run_bigquery_validation(
     sql_string: str,
     tool_context: ToolContext,
 ) -> str:
-    """Validates BigQuery SQL syntax and functionality.
+    """Validates and executes a BigQuery SQL query.
 
-    This function validates the provided SQL string by attempting to execute it
-    against BigQuery in dry-run mode. It performs the following checks:
-
-    1. **SQL Cleanup:**  Preprocesses the SQL string using a `cleanup_sql`
-    function
-    2. **DML/DDL Restriction:**  Rejects any SQL queries containing DML or DDL
-       statements (e.g., UPDATE, DELETE, INSERT, CREATE, ALTER) to ensure
-       read-only operations.
-    3. **Syntax and Execution:** Sends the cleaned SQL to BigQuery for validation.
-       If the query is syntactically correct and executable, it retrieves the
-       results.
-    4. **Result Analysis:**  Checks if the query produced any results. If so, it
-       formats the first few rows of the result set for inspection.
+    This function first cleans up the provided SQL string, then checks for any
+    disallowed DML/DDL operations. It then executes the query against BigQuery.
+    If the query is successful, it returns the results; otherwise, it returns an
+    error message.
 
     Args:
-        sql_string (str): The SQL query string to validate.
-        tool_context (ToolContext): The tool context to use for validation.
+        sql_string: The SQL query to validate and execute.
+        tool_context: The tool context, used to get the BigQuery client and
+          store the query results.
 
     Returns:
-        str: A message indicating the validation outcome. This includes:
-             - "Valid SQL. Results: ..." if the query is valid and returns data.
-             - "Valid SQL. Query executed successfully (no results)." if the query
-                is valid but returns no data.
-             - "Invalid SQL: ..." if the query is invalid, along with the error
-                message from BigQuery.
+        A dictionary containing either the 'query_result' on success or an
+        'error_message' on failure.
     """
 
     def cleanup_sql(sql_string):
@@ -276,7 +309,8 @@ def run_bigquery_validation(
         return final_result
 
     try:
-        query_job = get_bq_client().query(sql_string)
+        bq_client = get_bq_client(tool_context)
+        query_job = bq_client.query(sql_string)
         results = query_job.result()  # Get the query results
 
         if results.schema:  # Check if query returned data

@@ -21,6 +21,7 @@ import os
 from datetime import date
 
 from google.genai import types
+from google.api_core import exceptions
 
 from google.adk.agents import Agent
 from google.adk.runners import Runner
@@ -52,18 +53,30 @@ def setup_before_agent_call(callback_context: CallbackContext):
 
     # setting up schema in instruction
     if callback_context.state["all_db_settings"]["use_database"] == "BigQuery":
-        callback_context.state["database_settings"] = get_bq_database_settings()
-        schema = callback_context.state["database_settings"]["bq_ddl_schema"]
+        try:
+            callback_context.state["database_settings"] = get_bq_database_settings(
+                callback_context
+            )
+            schema = callback_context.state["database_settings"]["bq_ddl_schema"]
 
-        callback_context._invocation_context.agent.instruction = (
-            return_instructions_root()
-            + f"""
+            callback_context._invocation_context.agent.instruction = (
+                return_instructions_root()
+                + f"""
 
-    --------- The BigQuery schema of the relevant data with a few sample rows. ---------
+    --------- O schema do BigQuery para os dados relevantes com algumas linhas de exemplo. ---------
     {schema}
 
     """
-        )
+            )
+        except exceptions.Forbidden:
+            callback_context._invocation_context.agent.instruction = (
+                return_instructions_root()
+                + """
+
+    --------- ERRO ---------
+    O usuário não tem acesso à tabela do BigQuery necessária. Por favor, informe o usuário sobre este problema.
+    """
+            )
 
 
 root_agent = Agent(

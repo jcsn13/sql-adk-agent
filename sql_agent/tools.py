@@ -38,11 +38,29 @@ async def call_db_agent(
     question: str,
     tool_context: ToolContext,
 ):
-    """Tool to call database (nl2sql) agent."""
+    """Calls the database agent to answer a question using NL2SQL.
+
+    This tool invokes the `db_agent` to translate a natural language question into
+    a SQL query, execute it against the database, and return the result. It
+    propagates the OAuth token if available in the tool context.
+
+    Args:
+        question: The natural language question to be answered.
+        tool_context: The context object for the tool, containing state and
+          settings.
+
+    Returns:
+        The output from the database agent, typically a query result or an error
+        message.
+    """
     print(
         "\n call_db_agent.use_database:"
         f' {tool_context.state["all_db_settings"]["use_database"]}'
     )
+
+    # Propagate OAuth token to the sub-agent's context
+    if "oauth_token" in tool_context.state:
+        tool_context.state["oauth_token"] = tool_context.state["oauth_token"]
 
     agent_tool = AgentTool(agent=db_agent)
 
@@ -57,7 +75,22 @@ async def call_ds_agent(
     question: str,
     tool_context: ToolContext,
 ):
-    """Tool to call data science (nl2py) agent."""
+    """Calls the data science agent to perform analysis on data.
+
+    This tool invokes the `ds_agent` to perform data analysis on a given
+    dataset using a natural language question. It uses the query result from a
+    previous database query as the input data. If the question is "N/A", it
+    returns the previous database agent's output directly.
+
+    Args:
+        question: The natural language question guiding the data analysis.
+        tool_context: The context object for the tool, containing state and
+          the data to be analyzed.
+
+    Returns:
+        The output from the data science agent, which could be insights,
+        visualizations, or processed data.
+    """
 
     if question == "N/A":
         return tool_context.state["db_agent_output"]
@@ -84,9 +117,21 @@ async def call_ds_agent(
 async def download_image_and_save_to_artifacts(
     image_url: str, tool_context: ToolContext
 ) -> Dict[str, str]:
-    """
-    Downloads an image (JPG, JPEG, PNG only) from a URL,
-    saves it to artifacts, and returns status.
+    """Downloads an image from a URL and saves it to the tool's artifacts.
+
+    This function supports downloading images of type JPG, JPEG, and PNG. It
+    handles various HTTP errors and saves the successfully downloaded image as
+    an artifact, making it available for other tools or agents.
+
+    Args:
+        image_url: The URL of the image to download.
+        tool_context: The context object for the tool, used to save the
+          artifact.
+
+    Returns:
+        A dictionary containing the status of the download ('success' or
+        'failed'), a detail message, and the filename of the saved artifact if
+        successful.
     """
     allowed_content_types = {
         "image/jpeg": ".jpg",

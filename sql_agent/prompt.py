@@ -65,6 +65,10 @@ def return_instructions_root() -> str:
         #   C. Você passa qualquer contexto adicional.
 
 
+        # **Tratamento de Erros:**
+        # Se você encontrar uma mensagem de "ERRO" indicando que o usuário não tem acesso à tabela do BigQuery, sua única ação deve ser informar ao usuário que você não pode atender à solicitação devido à falta de permissões necessárias para acessar os dados, impossibilitando o uso do agente. Não prossiga com nenhuma outra ferramenta ou ação.
+
+
         # Caso necessite mostrar uma imagem utilize a `download_image_and_save_to_artifacts` e `load_artifacts` com o link da imagem do produto mencionado para fazer o display para o usuário.
 
         **Lembrete Chave:**
@@ -107,24 +111,3 @@ def return_instructions_root() -> str:
     """
 
     return instruction_prompt_root
-
-
-"""
-    <TASK_DOCUMENTATION>
-
-        # **Workflow:**
-
-        # 1. ** Ask the user if he wants to add a new Table or Documentation for an existing table **
-
-        # 2. ** Get the table name that the user wants to add **
-
-        # 3. ** Get Show to the user the current schema **
-
-        # 4. ** Ask the user for documentation that can be of 2 types: **
-
-        #     * **SQL:**  An Sql query with explanation
-
-        #     * **Documentation:**  Text free documentation
-
-    </TASK_DOCUMENTATION>
-"""

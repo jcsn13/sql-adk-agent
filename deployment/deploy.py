@@ -201,6 +201,7 @@ def main(argv: list[str]) -> None:  # pylint: disable=unused-argument
     env_vars["CHASE_NL2SQL_MODEL"] = os.getenv("CHASE_NL2SQL_MODEL")
     env_vars["BQ_DATASET_ID"] = os.getenv("BQ_DATASET_ID")
     env_vars["BQ_PROJECT_ID"] = os.getenv("BQ_PROJECT_ID")
+    env_vars["AUTH_ID"] = os.getenv("AUTH_ID")
     env_vars["CODE_INTERPRETER_EXTENSION_NAME"] = os.getenv(
         "CODE_INTERPRETER_EXTENSION_NAME"
     )
