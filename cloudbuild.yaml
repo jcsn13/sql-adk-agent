@@ -3,23 +3,22 @@
 
 # Put your variables here
 substitutions:
-  _PROJECT_ID: "your-project-id"
-  _LOCATION: "region"
+  _PROJECT_ID: "YOUR_PROJECT_ID"
+  _LOCATION: "YOUR_REGION"
   _ROOT_AGENT_MODEL: "gemini-2.5-flash"
   _ANALYTICS_AGENT_MODEL: "gemini-2.5-flash"
   _BASELINE_NL2SQL_MODEL: "gemini-2.5-flash"
   _BIGQUERY_AGENT_MODEL: "gemini-2.5-flash"
   _CHASE_NL2SQL_MODEL: "gemini-2.5-flash"
-  _BQ_DATASET_ID: "your-dataset"
-  _BQ_PROJECT_ID: "your-project-id"
-  _CODE_INTERPRETER_EXTENSION_NAME: "" # Leave it blank for create a new extension
+  _BQ_DATASET_ID: "YOUR_BQ_DATASET_ID"
+  _BQ_PROJECT_ID: "YOUR_BQ_PROJECT_ID"
   _NL2SQL_METHOD: "CHASE"
-  _APP_ID: "your-agentspace-app-id"
-  _AGENT_DISPLAY_NAME: "Name of your agent"
+  _APP_ID: "YOUR_AGENTSPACE_APP_ID"
+  _AGENT_DISPLAY_NAME: "YOUR_AGENT_NAME"
   _AGENT_ICON_URI: "https://fonts.gstatic.com/s/i/short-term/release/googlesymbols/smart_toy/default/24px.svg"
-  _TOOL_DESCRIPTION: "Agent description"
-  _AUTH_PATH: "projects/${_PROJECT_ID}/locations/global/authorizations/your-auth-id"
-  _AUTH_ID: "yout-auth-id"
+  _TOOL_DESCRIPTION: "YOUR_AGENT_DESCRIPTION"
+  _AUTH_PATH: "projects/YOUR_PROJECT_NUMBER/locations/global/authorizations/YOUR_AUTH_ID_NAME"
+  _AUTH_ID: "YOUR_AUTH_ID_NAME"
 
 steps:
   - name: 'python:3.12-slim'
@@ -64,7 +63,6 @@ steps:
       - 'CHASE_NL2SQL_MODEL=${_CHASE_NL2SQL_MODEL}'
       - 'BQ_DATASET_ID=${_BQ_DATASET_ID}'
       - 'BQ_PROJECT_ID=${_BQ_PROJECT_ID}'
-      - 'CODE_INTERPRETER_EXTENSION_NAME=${_CODE_INTERPRETER_EXTENSION_NAME}'
       - 'NL2SQL_METHOD=${_NL2SQL_METHOD}'
       - 'AUTH_ID=${_AUTH_ID}'
     args:
