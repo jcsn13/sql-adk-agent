@@ -12,265 +12,478 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Deployment script for Data Science agent."""
+"""
+Deployment script for SQL ADK Agent to Google Cloud Agent Engine and AgentSpace.
 
-import logging
+This script:
+1. Deploys the agent to Vertex AI Agent Engine using ADK
+2. Registers the agent in AgentSpace for enterprise discovery
+3. Saves deployment state for later undeployment
+
+Usage:
+    python deployment/deploy.py
+"""
+
 import os
+import sys
+import json
+import logging
+import subprocess
+import argparse
+import time
+from pathlib import Path
+from datetime import datetime
+from typing import Dict, Any, Optional
 
-import vertexai
-from absl import app, flags
-from sql_agent.agent import root_agent
+import requests
 from dotenv import load_dotenv
-from google.api_core import exceptions as google_exceptions
-from google.cloud import storage
+import vertexai
+from vertexai.preview import reasoning_engines
 from vertexai import agent_engines
-from vertexai.preview.reasoning_engines import AdkApp
-
-FLAGS = flags.FLAGS
-flags.DEFINE_string("project_id", None, "GCP project ID.")
-flags.DEFINE_string("location", None, "GCP location.")
-flags.DEFINE_string(
-    "bucket", None, "GCP bucket name (without gs:// prefix)."
-)  # Changed flag description
-flags.DEFINE_string("resource_id", None, "ReasoningEngine resource ID.")
-
-flags.DEFINE_bool("create", False, "Create a new agent.")
-flags.DEFINE_bool("delete", False, "Delete an existing agent.")
-flags.mark_bool_flags_as_mutual_exclusive(["create", "delete"])
-
-AGENT_WHL_FILE = "sql_agent-0.1-py3-none-any.whl"
+from google.cloud import storage
+from google.api_core import exceptions as google_exceptions
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger(__name__)
 
+# Add project root to path for proper package imports
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
-def setup_staging_bucket(project_id: str, location: str, bucket_name: str) -> str:
-    """
-    Checks if the staging bucket exists, creates it if not.
 
-    Args:
-        project_id: The GCP project ID.
-        location: The GCP location for the bucket.
-        bucket_name: The desired name for the bucket (without gs:// prefix).
+class DeploymentError(Exception):
+    """Custom exception for deployment errors"""
 
-    Returns:
-        The full bucket path (gs://<bucket_name>).
+    pass
 
-    Raises:
-        google_exceptions.GoogleCloudError: If bucket creation fails.
-    """
-    storage_client = storage.Client(project=project_id)
-    try:
-        # Check if the bucket exists
-        bucket = storage_client.lookup_bucket(bucket_name)
-        if bucket:
-            logger.info("Staging bucket gs://%s already exists.", bucket_name)
+
+class AgentDeployer:
+    """Handles deployment of the SQL ADK Agent"""
+
+    def __init__(self):
+        """Initialize deployer with environment configuration"""
+        load_dotenv()
+
+        # Required environment variables
+        self.project_id = self._get_env_var("GOOGLE_CLOUD_PROJECT")
+        self.project_number = self._get_env_var("GOOGLE_CLOUD_PROJECT_NUMBER")
+        self.location = self._get_env_var("GOOGLE_CLOUD_LOCATION")
+        self.bucket_name = self._get_env_var("GOOGLE_CLOUD_STORAGE_BUCKET")
+
+        # AgentSpace configuration
+        self.agentspace_app_id = self._get_env_var("APP_ID")
+        self.agent_display_name = self._get_env_var("AGENT_DISPLAY_NAME")
+        self.agent_description = self._get_env_var("TOOL_DESCRIPTION")
+        self.agent_icon_uri = self._get_env_var("AGENT_ICON_URI")
+
+        # OAuth configuration
+        self.client_id = self._get_env_var("CLIENT_ID")
+        self.client_secret = self._get_env_var("CLIENT_SECRET")
+
+        # Check if running from Terraform (OAuth client managed externally)
+        self.terraform_managed = self._is_terraform_managed()
+
+        # Auth path will be generated dynamically or from environment
+        self.auth_path = os.getenv(
+            "AUTH_PATH"
+        )  # Optional, will be created if not provided
+        self.authorization_id: Optional[str] = None
+
+        # Environment variables to pass to the agent
+        self.agent_env_vars = {
+            "ROOT_AGENT_MODEL": os.getenv("ROOT_AGENT_MODEL"),
+            "ANALYTICS_AGENT_MODEL": os.getenv("ANALYTICS_AGENT_MODEL"),
+            "BASELINE_NL2SQL_MODEL": os.getenv("BASELINE_NL2SQL_MODEL"),
+            "BIGQUERY_AGENT_MODEL": os.getenv("BIGQUERY_AGENT_MODEL"),
+            "CHASE_NL2SQL_MODEL": os.getenv("CHASE_NL2SQL_MODEL"),
+            "BQ_DATASET_ID": os.getenv("BQ_DATASET_ID"),
+            "BQ_PROJECT_ID": os.getenv("BQ_PROJECT_ID"),
+            "AUTH_ID": os.getenv("AUTH_ID"),
+            "NL2SQL_METHOD": os.getenv("NL2SQL_METHOD"),
+        }
+
+        # Filter out None and empty string values
+        self.agent_env_vars = {
+            k: v for k, v in self.agent_env_vars.items() if v is not None and v != ""
+        }
+
+        # Deployment state
+        self.state_file = Path("deployment/.deployment_state.json")
+        self.deployed_agent = None
+
+        logger.info(f"Deployer initialized for project: {self.project_id}")
+        if self.terraform_managed:
+            logger.info(
+                "Running in Terraform-managed mode (OAuth client managed by Terraform)"
+            )
         else:
-            logger.info("Staging bucket gs://%s not found. Creating...", bucket_name)
-            # Create the bucket if it doesn't exist
-            new_bucket = storage_client.create_bucket(
-                bucket_name, project=project_id, location=location
+            logger.info("Running in standalone mode")
+
+    def _get_env_var(self, name: str) -> str:
+        """Get required environment variable or raise error"""
+        value = os.getenv(name)
+        if not value:
+            raise DeploymentError(f"Required environment variable {name} not set")
+        return value
+
+    def _is_terraform_managed(self) -> bool:
+        """Check if OAuth client is managed by Terraform"""
+        # Detect Terraform execution by checking for Terraform-specific environment patterns
+        terraform_indicators = [
+            "TF_VAR_",  # Terraform variable prefix
+            "TERRAFORM_",  # Terraform-specific vars
+        ]
+
+        # Check if any environment variables suggest Terraform execution
+        env_vars = os.environ.keys()
+        for indicator in terraform_indicators:
+            if any(var.startswith(indicator) for var in env_vars):
+                return True
+
+        # Also check for a direct Terraform flag
+        return os.getenv("TERRAFORM_MANAGED", "false").lower() == "true"
+
+    def _get_access_token(self) -> str:
+        """Get Google Cloud access token"""
+        try:
+            result = subprocess.run(
+                ["gcloud", "auth", "print-access-token"],
+                capture_output=True,
+                text=True,
+                check=True,
             )
-            logger.info(
-                "Successfully created staging bucket gs://%s in %s.",
-                new_bucket.name,
-                location,
+            return result.stdout.strip()
+        except subprocess.CalledProcessError as e:
+            raise DeploymentError(f"Failed to get access token: {e}")
+
+    def create_oauth_authorization(self, access_token: str) -> Dict[str, str]:
+        """Create OAuth authorization using Discovery Engine API"""
+        logger.info("Creating OAuth authorization...")
+
+        # Use AUTH_ID from environment or generate unique authorization ID using timestamp
+        auth_id = os.getenv("AUTH_ID", f"sql-agent-auth-{int(time.time())}")
+
+        # Build authorization creation URL (using project_id for API calls)
+        auth_url = (
+            f"https://discoveryengine.googleapis.com/v1alpha/"
+            f"projects/{self.project_id}/locations/global/authorizations"
+            f"?authorizationId={auth_id}"
+        )
+
+        # Prepare OAuth payload (using project_id for API calls)
+        payload = {
+            "name": f"projects/{self.project_id}/locations/global/authorizations/{auth_id}",
+            "serverSideOauth2": {
+                "clientId": self.client_id,
+                "clientSecret": self.client_secret,
+                "authorizationUri": (
+                    "https://accounts.google.com/o/oauth2/v2/auth"
+                    "?client_id={OAUTH_CLIENT_ID}&response_type=code&access_type=offline"
+                    "&prompt=consent&scope=openid%20https%3A%2F%2Fwww.googleapis.com"
+                    "%2Fauth%2Fuserinfo.email%20https%3A%2F%2Fwww.googleapis.com"
+                    "%2Fauth%2Fuserinfo.profile%20https%3A%2F%2Fwww.googleapis.com"
+                    "%2Fauth%2Fbigquery"
+                ),
+                "tokenUri": "https://oauth2.googleapis.com/token",
+            },
+        }
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+            "X-Goog-User-Project": self.project_id,
+        }
+
+        try:
+            response = requests.post(auth_url, json=payload, headers=headers)
+
+            if response.status_code in [200, 201]:
+                logger.info(f"OAuth authorization created successfully: {auth_id}")
+                auth_path = f"projects/{self.project_number}/locations/global/authorizations/{auth_id}"
+                return {"auth_id": auth_id, "auth_path": auth_path}
+            elif response.status_code == 409:
+                # Authorization already exists, use it
+                logger.info(f"OAuth authorization already exists: {auth_id}")
+                auth_path = f"projects/{self.project_number}/locations/global/authorizations/{auth_id}"
+                return {"auth_id": auth_id, "auth_path": auth_path}
+            else:
+                raise DeploymentError(
+                    f"OAuth authorization creation failed: {response.status_code} - {response.text}"
+                )
+
+        except requests.RequestException as e:
+            raise DeploymentError(f"Failed to create OAuth authorization: {e}")
+
+    def setup_staging_bucket(self) -> str:
+        """Setup or verify staging bucket exists"""
+        logger.info(f"Setting up staging bucket: {self.bucket_name}")
+        storage_client = storage.Client(project=self.project_id)
+        try:
+            bucket = storage_client.lookup_bucket(self.bucket_name)
+            if bucket:
+                logger.info(f"Staging bucket gs://{self.bucket_name} already exists")
+            else:
+                logger.info(f"Creating staging bucket: gs://{self.bucket_name}")
+                new_bucket = storage_client.create_bucket(
+                    self.bucket_name, project=self.project_id, location=self.location
+                )
+                new_bucket.iam_configuration.uniform_bucket_level_access_enabled = True
+                new_bucket.patch()
+                logger.info(
+                    f"Created staging bucket with uniform access: gs://{new_bucket.name}"
+                )
+        except google_exceptions.Forbidden as e:
+            raise DeploymentError(
+                f"Permission denied for bucket {self.bucket_name}: {e}"
             )
-            # Enable uniform bucket-level access for simplicity
-            new_bucket.iam_configuration.uniform_bucket_level_access_enabled = True
-            new_bucket.patch()
-            logger.info(
-                "Enabled uniform bucket-level access for gs://%s.",
-                new_bucket.name,
+        except google_exceptions.Conflict as e:
+            logger.warning(f"Bucket conflict (may exist in another project): {e}")
+        except Exception as e:
+            raise DeploymentError(f"Failed to setup staging bucket: {e}")
+        return f"gs://{self.bucket_name}"
+
+    def deploy_to_agent_engine(self) -> str:
+        """Deploy agent to Vertex AI Agent Engine"""
+        logger.info("Deploying to Vertex AI Agent Engine...")
+        try:
+            staging_bucket_uri = self.setup_staging_bucket()
+            vertexai.init(
+                project=self.project_id,
+                location=self.location,
+                staging_bucket=staging_bucket_uri,
             )
+            from sql_agent.agent import root_agent
 
-    except google_exceptions.Forbidden as e:
-        logger.error(
-            (
-                "Permission denied error for bucket gs://%s. "
-                "Ensure the service account has 'Storage Admin' role. Error: %s"
-            ),
-            bucket_name,
-            e,
+            adk_app = reasoning_engines.AdkApp(
+                agent=root_agent,
+                enable_tracing=True,
+            )
+            requirements = [
+                "google-cloud-aiplatform[adk,agent_engines]>=1.102.0",
+                "google-cloud-storage>=2.10.0",
+                "requests>=2.31.0",
+                "python-dotenv>=1.0.1",
+                "google-adk>=1.6.1",
+                "immutabledict>=4.2.1",
+                "sqlglot>=26.10.1",
+                "db-dtypes>=1.4.2",
+                "regex>=2024.11.6",
+                "tabulate>=0.9.0",
+                "google-genai>=1.21.1",
+                "absl-py>=2.2.2",
+                "pydantic>=2.11.3",
+            ]
+            logger.info("Creating Agent Engine deployment...")
+            self.deployed_agent = agent_engines.create(
+                agent_engine=adk_app,
+                requirements=requirements,
+                extra_packages=["sql_agent"],
+                env_vars=self.agent_env_vars,
+            )
+            resource_name = self.deployed_agent.resource_name
+            logger.info(f"Successfully deployed to Agent Engine: {resource_name}")
+            return resource_name
+        except ImportError as e:
+            raise DeploymentError(f"Failed to import root_agent: {e}")
+        except Exception as e:
+            logger.error(f"Agent Engine deployment error details: {e}")
+            raise DeploymentError(f"Agent Engine deployment failed: {e}")
+
+    def register_in_agentspace(
+        self, agent_resource_name: str, access_token: str
+    ) -> str:
+        """Register agent in AgentSpace"""
+        logger.info("Registering agent in AgentSpace...")
+        agents_url = (
+            f"https://discoveryengine.googleapis.com/v1alpha/"
+            f"projects/{self.project_id}/locations/global/collections/default_collection/"
+            f"engines/{self.agentspace_app_id}/assistants/default_assistant/agents"
         )
-        raise
-    except google_exceptions.Conflict as e:
-        logger.warning(
-            (
-                "Bucket gs://%s likely already exists but owned by another "
-                "project or recently deleted. Error: %s"
-            ),
-            bucket_name,
-            e,
-        )
-        # Assuming we can proceed if it exists, even with a conflict warning
-    except google_exceptions.ClientError as e:
-        logger.error(
-            "Failed to create or access bucket gs://%s. Error: %s",
-            bucket_name,
-            e,
-        )
-        raise
+        payload = {
+            "displayName": self.agent_display_name,
+            "description": self.agent_description,
+            "icon": {"uri": self.agent_icon_uri},
+            "adk_agent_definition": {
+                "tool_settings": {"tool_description": self.agent_description},
+                "provisioned_reasoning_engine": {
+                    "reasoning_engine": agent_resource_name
+                },
+                "authorizations": [self.auth_path],
+            },
+        }
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+            "X-Goog-User-Project": self.project_id,
+        }
+        try:
+            response = requests.post(agents_url, json=payload, headers=headers)
+            if response.status_code in [200, 201]:
+                agent_data = response.json()
+                agent_id = agent_data.get("name", "").split("/")[-1]
+                logger.info(f"Agent registered in AgentSpace: {agent_id}")
+                return agent_id
+            else:
+                raise DeploymentError(
+                    f"AgentSpace registration failed: {response.status_code} - {response.text}"
+                )
+        except requests.RequestException as e:
+            raise DeploymentError(f"Failed to register in AgentSpace: {e}")
 
-    return f"gs://{bucket_name}"
+    def save_deployment_state(self, agent_resource_name: str, agent_id: str):
+        """Save deployment state for undeployment"""
+        state_data = {
+            "deployment_timestamp": datetime.now().isoformat(),
+            "project_id": self.project_id,
+            "location": self.location,
+            "agent_resource_name": agent_resource_name,
+            "agent_id": agent_id,
+            "agentspace_app_id": self.agentspace_app_id,
+            "agent_display_name": self.agent_display_name,
+            "auth_path": self.auth_path,
+            "oauth_mode": "u2m",  # User-to-Machine OAuth
+            "terraform_managed": self.terraform_managed,  # Track OAuth management mode
+        }
+
+        # Include authorization_id if it was created during deployment
+        if self.authorization_id:
+            state_data["authorization_id"] = self.authorization_id
+
+        self.state_file.parent.mkdir(exist_ok=True)
+        with open(self.state_file, "w") as f:
+            json.dump(state_data, f, indent=2)
+        logger.info(f"Deployment state saved to: {self.state_file}")
+
+    def rollback_deployment(self):
+        """Rollback deployment in case of partial failure"""
+        logger.warning("Rolling back deployment due to failure...")
+
+        # Clean up Agent Engine deployment
+        try:
+            if self.deployed_agent:
+                logger.info("Deleting Agent Engine deployment...")
+                self.deployed_agent.delete(force=True)
+                logger.info("Agent Engine deployment deleted")
+        except Exception as e:
+            logger.error(f"Failed to rollback Agent Engine deployment: {e}")
+
+        # Clean up OAuth authorization if created (but not if Terraform-managed)
+        if self.authorization_id and not self.terraform_managed:
+            try:
+                logger.info(f"Cleaning up OAuth authorization: {self.authorization_id}")
+                access_token = self._get_access_token()
+                delete_url = (
+                    f"https://discoveryengine.googleapis.com/v1alpha/"
+                    f"projects/{self.project_id}/locations/global/authorizations/{self.authorization_id}"
+                )
+                headers = {
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json",
+                    "X-Goog-User-Project": self.project_id,
+                }
+                response = requests.delete(delete_url, headers=headers)
+                if response.status_code in [200, 204]:
+                    logger.info("OAuth authorization cleaned up successfully")
+                else:
+                    logger.warning(
+                        f"Failed to clean up OAuth authorization: {response.status_code}"
+                    )
+            except Exception as e:
+                logger.error(f"Failed to rollback OAuth authorization: {e}")
+        elif self.authorization_id and self.terraform_managed:
+            logger.info("OAuth authorization cleanup skipped (managed by Terraform)")
+
+        # Clean up deployment state file
+        if self.state_file.exists():
+            self.state_file.unlink()
+            logger.info("Cleaned up deployment state file")
+
+    def deploy(self) -> Dict[str, Any]:
+        """Execute complete deployment process"""
+        logger.info("Starting SQL ADK Agent deployment...")
+        try:
+            # Step 1: Get access token
+            access_token = self._get_access_token()
+
+            # Step 2: Handle OAuth authorization based on management mode
+            if not self.auth_path:
+                if self.terraform_managed:
+                    logger.info(
+                        "AUTH_PATH not provided, creating OAuth authorization with Terraform-managed credentials..."
+                    )
+                else:
+                    logger.info(
+                        "AUTH_PATH not provided, creating OAuth authorization..."
+                    )
+
+                oauth_result = self.create_oauth_authorization(access_token)
+                self.auth_path = oauth_result["auth_path"]
+                self.authorization_id = oauth_result["auth_id"]
+                logger.info(f"Using dynamically created AUTH_PATH: {self.auth_path}")
+            else:
+                logger.info(f"Using existing AUTH_PATH: {self.auth_path}")
+
+            # Step 3: Deploy to Agent Engine
+            agent_resource_name = self.deploy_to_agent_engine()
+
+            # Step 4: Register in AgentSpace
+            agent_id = self.register_in_agentspace(agent_resource_name, access_token)
+
+            # Step 5: Save deployment state
+            self.save_deployment_state(agent_resource_name, agent_id)
+
+            result = {
+                "status": "success",
+                "agent_resource_name": agent_resource_name,
+                "agent_id": agent_id,
+                "agentspace_url": f"https://agentspace.google.com/studio/{self.project_id}",
+                "message": "SQL ADK Agent successfully deployed and registered.",
+                "auth_path": self.auth_path,
+                "oauth_created": self.authorization_id is not None,
+            }
+
+            logger.info("Deployment completed successfully!")
+            logger.info(f"Agent Resource: {agent_resource_name}")
+            logger.info(f"AgentSpace Agent ID: {agent_id}")
+            logger.info(f"AUTH_PATH: {self.auth_path}")
+            if self.authorization_id:
+                logger.info(f"OAuth Authorization ID: {self.authorization_id}")
+            logger.info(f"AgentSpace URL: {result['agentspace_url']}")
+            return result
+        except Exception as e:
+            logger.error(f"Deployment failed: {e}")
+            self.rollback_deployment()
+            raise
 
 
-def create(env_vars: dict[str, str]) -> None:
-    """Creates and deploys the agent."""
-    adk_app = AdkApp(
-        agent=root_agent,
-        enable_tracing=False,
+def main():
+    """Main deployment function"""
+    parser = argparse.ArgumentParser(
+        description="Deploy SQL ADK Agent to Google Cloud."
     )
-
-    if not os.path.exists(AGENT_WHL_FILE):
-        logger.error("Agent wheel file not found at: %s", AGENT_WHL_FILE)
-        # Consider adding instructions here on how to build the wheel file
-        raise FileNotFoundError(f"Agent wheel file not found: {AGENT_WHL_FILE}")
-
-    logger.info("Using agent wheel file: %s", AGENT_WHL_FILE)
-
-    remote_agent = agent_engines.create(
-        adk_app,
-        requirements=[AGENT_WHL_FILE],
-        extra_packages=[AGENT_WHL_FILE],
-        env_vars=env_vars,
-    )
-    logger.info("Created remote agent: %s", remote_agent.resource_name)
-    print(f"\nSuccessfully created agent: {remote_agent.resource_name}")
-
-    # Write the agent resource name to a file for subsequent Cloud Build steps
-    agent_resource_name_file = os.path.join(
-        os.path.dirname(__file__), "agent_resource_name.txt"
-    )
+    args = parser.parse_args()
     try:
-        with open(agent_resource_name_file, "w") as f:
-            f.write(remote_agent.resource_name)
-        logger.info(
-            "Successfully wrote agent resource name to %s", agent_resource_name_file
-        )
-    except IOError as e:
-        logger.error("Failed to write agent resource name to file: %s", e)
-        # Depending on the desired behavior, you might want to re-raise the exception
-        # or handle it in a way that stops the build if this file is critical.
-        raise
-
-
-def delete(resource_id: str) -> None:
-    """Deletes the specified agent."""
-    logger.info("Attempting to delete agent: %s", resource_id)
-    try:
-        remote_agent = agent_engines.get(resource_id)
-        remote_agent.delete(force=True)
-        logger.info("Successfully deleted remote agent: %s", resource_id)
-        print(f"\nSuccessfully deleted agent: {resource_id}")
-    except google_exceptions.NotFound:
-        logger.error("Agent with resource ID %s not found.", resource_id)
-        print(f"\nAgent{resource_id} not found.")
-        print(f"\nAgent not found: {resource_id}")
+        deployer = AgentDeployer()
+        result = deployer.deploy()
+        print("\n" + "=" * 60)
+        print("🎉 DEPLOYMENT SUCCESSFUL!")
+        print("=" * 60)
+        print(f"Agent Resource: {result['agent_resource_name']}")
+        print(f"AgentSpace Agent ID: {result['agent_id']}")
+        print(f"AgentSpace URL: {result['agentspace_url']}")
+        print("\nYour SQL ADK Agent is now available in Google AgentSpace!")
+        print("=" * 60)
+        return 0
+    except DeploymentError as e:
+        print(f"\n❌ Deployment Error: {e}")
+        return 1
     except Exception as e:
-        logger.error("An error occurred while deleting agent %s: %s", resource_id, e)
-        print(f"\nError deleting agent {resource_id}: {e}")
-
-
-def main(argv: list[str]) -> None:  # pylint: disable=unused-argument
-    """Main execution function."""
-    load_dotenv()
-    env_vars = {}
-
-    project_id = (
-        FLAGS.project_id if FLAGS.project_id else os.getenv("GOOGLE_CLOUD_PROJECT")
-    )
-    location = FLAGS.location if FLAGS.location else os.getenv("GOOGLE_CLOUD_LOCATION")
-    # If location is 'global', hardcode to 'us-central1'
-    if location == "global":
-        location = "us-central1"
-    # Default bucket name convention if not provided
-    default_bucket_name = f"{project_id}-adk-staging" if project_id else None
-    bucket_name = (
-        FLAGS.bucket
-        if FLAGS.bucket
-        else os.getenv("GOOGLE_CLOUD_STORAGE_BUCKET", default_bucket_name)
-    )
-    # Don't set "GOOGLE_CLOUD_PROJECT" or "GOOGLE_CLOUD_LOCATION"
-    # when deploying to Agent Engine. Those are set by the backend.
-    env_vars["ROOT_AGENT_MODEL"] = os.getenv("ROOT_AGENT_MODEL")
-    env_vars["ANALYTICS_AGENT_MODEL"] = os.getenv("ANALYTICS_AGENT_MODEL")
-    env_vars["BASELINE_NL2SQL_MODEL"] = os.getenv("BASELINE_NL2SQL_MODEL")
-    env_vars["BIGQUERY_AGENT_MODEL"] = os.getenv("BIGQUERY_AGENT_MODEL")
-    env_vars["CHASE_NL2SQL_MODEL"] = os.getenv("CHASE_NL2SQL_MODEL")
-    env_vars["BQ_DATASET_ID"] = os.getenv("BQ_DATASET_ID")
-    env_vars["BQ_PROJECT_ID"] = os.getenv("BQ_PROJECT_ID")
-    env_vars["AUTH_ID"] = os.getenv("AUTH_ID")
-    env_vars["NL2SQL_METHOD"] = os.getenv("NL2SQL_METHOD")
-
-    logger.info("Using PROJECT: %s", project_id)
-    logger.info("Using LOCATION: %s", location)
-    logger.info("Using BUCKET NAME: %s", bucket_name)
-
-    # --- Input Validation ---
-    if not project_id:
-        print("\nError: Missing required GCP Project ID.")
-        print(
-            "Set the GOOGLE_CLOUD_PROJECT environment variable or use --project_id flag."
-        )
-        return
-    if not location:
-        print("\nError: Missing required GCP Location.")
-        print(
-            "Set the GOOGLE_CLOUD_LOCATION environment variable or use --location flag."
-        )
-        return
-    if not bucket_name:
-        print("\nError: Missing required GCS Bucket Name.")
-        print(
-            "Set the GOOGLE_CLOUD_STORAGE_BUCKET environment variable or use --bucket flag."
-        )
-        return
-    if not FLAGS.create and not FLAGS.delete:
-        print("\nError: You must specify either --create or --delete flag.")
-        return
-    if FLAGS.delete and not FLAGS.resource_id:
-        print("\nError: --resource_id is required when using the --delete flag.")
-        return
-    # --- End Input Validation ---
-
-    try:
-        # Setup staging bucket
-        staging_bucket_uri = None
-        if FLAGS.create:
-            staging_bucket_uri = setup_staging_bucket(project_id, location, bucket_name)
-
-        # Initialize Vertex AI *after* bucket setup and validation
-        vertexai.init(
-            project=project_id,
-            location=location,
-            staging_bucket=staging_bucket_uri,  # Staging bucket is passed directly to create/update methods now
-        )
-
-        if FLAGS.create:
-            create(env_vars)
-        elif FLAGS.delete:
-            delete(FLAGS.resource_id)
-
-    except google_exceptions.Forbidden as e:
-        print(
-            "Permission Error: Ensure the service account/user has necessary "
-            "permissions (e.g., Storage Admin, Vertex AI User)."
-            f"\nDetails: {e}"
-        )
-    except FileNotFoundError as e:
-        print(f"\nFile Error: {e}")
-        print(
-            "Please ensure the agent wheel file exists in the 'deployment' "
-            "directory and you have run the build script "
-            "(e.g., poetry build --format=wheel --output=deployment')."
-        )
-    except Exception as e:
-        print(f"\nAn unexpected error occurred: {e}")
-        logger.exception("Unhandled exception in main:")
+        print(f"\n💥 Unexpected Error: {e}")
+        return 1
 
 
 if __name__ == "__main__":
-
-    app.run(main)
+    exit(main())

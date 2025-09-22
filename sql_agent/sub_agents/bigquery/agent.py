@@ -20,7 +20,7 @@ from google.adk.agents import Agent
 from google.adk.agents.callback_context import CallbackContext
 from google.genai import types
 
-from . import tools
+from . import callbacks, tools
 from .chase_sql import chase_db_tools
 from .prompts import return_instructions_bigquery
 

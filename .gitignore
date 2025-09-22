@@ -143,3 +143,22 @@ dmypy.json
 
 # Docs files
 documentation/
+
+# Terraform files
+terraform/terraform.tfvars
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/.terraform.lock.hcl
+
+# Temporary OAuth files
+/tmp/client_id.txt
+/tmp/client_secret.txt
+/tmp/oauth_response.json
+/tmp/access_token.txt
+
+# Deployment state
+deployment/.deployment_state.json
+
+# Cline
+memory-bank

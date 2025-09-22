@@ -1,0 +1,34 @@
+# terraform.tfvars.example
+# Copy this file to terraform.tfvars and fill in your actual values
+# Note: terraform.tfvars should be added to .gitignore for security
+
+# Google Cloud Platform Configuration
+google_cloud_project        = "your-gcp-project-id"
+google_cloud_project_number = "your-gcp-project-number"
+google_cloud_location       = "us-central1"
+google_cloud_storage_bucket = "your-gcs-bucket-name"
+
+# AgentSpace Configuration
+app_id             = "your-agentspace-app-id"
+agent_display_name = "SQL ADK Agent"
+tool_description   = "SQL analysis and BigQuery agent for data insights"
+agent_icon_uri     = "https://fonts.gstatic.com/s/i/short-term/release/googlesymbols/smart_toy/default/24px.svg"
+
+# Agent Model Configuration
+root_agent_model      = "gemini-2.5-flash"
+analytics_agent_model = "gemini-2.5-flash"
+baseline_nl2sql_model = "gemini-2.5-flash"
+bigquery_agent_model  = "gemini-2.5-flash"
+chase_nl2sql_model    = "gemini-2.5-flash"
+
+# BigQuery Configuration
+bq_dataset_id = "your-bq-dataset-id"
+bq_project_id = "your-bq-project-id"
+
+# OAuth Client Credentials (manually created in Google Cloud Console)
+oauth_client_id     = "your-oauth-client-id.apps.googleusercontent.com"
+oauth_client_secret = "your-oauth-client-secret"
+
+# Agent Configuration
+auth_id       = "your-auth-id"
+nl2sql_method = "CHASE"
